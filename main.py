@@ -17,6 +17,18 @@ class TrophyManager:
         self.font_style = ("微软雅黑", 11)
         self.header_font_style = ("微软雅黑", 11, "bold")
 
+        # 排序选项和当前排序方式
+        self.sort_options = {
+            "物种升序": ("species", True),
+            "物种降序": ("species", False),
+            "等级升序": ("grade", True),
+            "等级降序": ("grade", False),
+            "评分升序": ("score", True),
+            "评分降序": ("score", False)
+        }
+
+        self.current_sort = "物种升序"
+
         # 设置图标
         self.set_window_icon()
 
@@ -85,6 +97,10 @@ class TrophyManager:
         add_btn = tk.Button(toolbar, text="添加", command=self.show_add_dialog)
         add_btn.pack(side=tk.LEFT, padx=2, pady=2)
 
+        # 删除按钮
+        delete_btn = tk.Button(toolbar, text="删除", command=self.delete_selected)
+        delete_btn.pack(side=tk.LEFT, padx=2, pady=2)
+
         # 设置按钮
         settings_btn = tk.Button(toolbar, text="设置", command=self.show_settings_dialog)
         settings_btn.pack(side=tk.LEFT, padx=2, pady=2)
@@ -102,6 +118,24 @@ class TrophyManager:
 
         search_btn = tk.Button(search_frame, text="搜索", command=self.search_data)
         search_btn.pack(side=tk.LEFT, padx=2)
+
+        # 在工具栏右侧添加排序控件
+        sort_frame = tk.Frame(toolbar)
+        sort_frame.pack(side=tk.RIGHT, padx=5)
+
+        tk.Label(sort_frame, text="排序方式:").pack(side=tk.LEFT)
+
+        # 排序方式下拉框
+        self.sort_var = tk.StringVar(value=self.current_sort)
+        self.sort_menu = ttk.Combobox(
+            sort_frame,
+            textvariable=self.sort_var,
+            values=list(self.sort_options.keys()),
+            state="readonly",
+            width=16
+        )
+        self.sort_menu.pack(side=tk.LEFT, padx=2)
+        self.sort_menu.bind("<<ComboboxSelected>>", self.change_sort_method)
 
         # 数据表格
         self.create_table()
@@ -165,6 +199,11 @@ class TrophyManager:
 
         self.table.pack(fill=tk.BOTH, expand=True)
 
+    def change_sort_method(self, event=None):
+        """更改排序方法"""
+        self.current_sort = self.sort_var.get()
+        self.load_data()
+
     def load_data(self):
         """从CSV文件加载数据并显示在表格中"""
         try:
@@ -183,12 +222,47 @@ class TrophyManager:
             # 读取CSV文件
             df = pd.read_csv(self.settings["csv_path"], encoding="utf-8-sig")
 
-            # 按物种拼音排序
-            df['pinyin'] = df['species'].apply(lambda x: ''.join([i[0] for i in pinyin(x, style=Style.FIRST_LETTER)]))
-            df = df.sort_values('pinyin').drop('pinyin', axis=1)
+            # 获取当前排序方式
+            sort_key, ascending = self.sort_options[self.current_sort]
+
+            # 添加拼音列用于排序
+            df['pinyin'] = df['species'].apply(
+                lambda x: ''.join([i[0] for i in pinyin(x, style=Style.FIRST_LETTER)]))
+
+            # 定义等级排序权重
+            grade_order = {
+                "珍禽异兽": 5,
+                "钻石": 4,
+                "黄金": 3,
+                "白银": 2,
+                "青铜": 1
+            }
+            df['grade_weight'] = df['grade'].map(grade_order)
+
+            # 根据排序键选择排序列
+            if sort_key == "species":
+                sort_col = 'pinyin'
+            elif sort_key == "grade":
+                sort_col = 'grade_weight'
+            else:
+                sort_col = sort_key
+
+            # 主排序
+            df_sorted = df.sort_values(
+                sort_col,
+                ascending=ascending,
+                kind='mergesort'  # 保持排序稳定性
+            )
+
+            # # 次级排序（等级降序、评分降序、ID升序）
+            # df_sorted = df_sorted.sort_values(
+            #     ['grade_weight', 'score', 'id'],
+            #     ascending=[False, False, True],
+            #     kind='mergesort'
+            # )
 
             # 添加数据到表格
-            for _, row in df.iterrows():
+            for _, row in df_sorted.iterrows():
                 self.add_row_to_table(row)
 
         except Exception as e:
@@ -202,7 +276,8 @@ class TrophyManager:
             "青铜": "#CD7F32",
             "白银": "#C0C0C0",
             "黄金": "#FFD700",
-            "钻石": "#B9F2FF"
+            "钻石": "#B9F2FF",
+            "珍禽异兽": "#800080"
         }.get(grade, "black")
 
         # 格式化评分为两位小数
@@ -221,6 +296,7 @@ class TrophyManager:
         self.table.tag_configure("#C0C0C0", foreground="#C0C0C0")
         self.table.tag_configure("#FFD700", foreground="#FFD700")
         self.table.tag_configure("#B9F2FF", foreground="#B9F2FF")
+        self.table.tag_configure("#800080", foreground="#800080")
 
     def search_data(self):
         """搜索数据"""
@@ -241,13 +317,49 @@ class TrophyManager:
             mask = df["species"].str.contains(keyword, case=False, na=False)
             result = df.loc[mask].copy()
 
-            # 按物种拼音排序
-            result.loc[:, 'pinyin'] = result['species'].apply(
+            # 获取当前排序方式
+            sort_key, ascending = self.sort_options.get(
+                self.current_sort, ("species", True)  # 默认按物种拼音升序
+            )
+
+            # 添加拼音列用于排序
+            result['pinyin'] = result['species'].apply(
                 lambda x: ''.join([i[0] for i in pinyin(x, style=Style.FIRST_LETTER)]))
-            result = result.sort_values('pinyin').drop('pinyin', axis=1)
+
+            # 定义等级排序权重
+            grade_order = {
+                "珍禽异兽": 5,
+                "钻石": 4,
+                "黄金": 3,
+                "白银": 2,
+                "青铜": 1
+            }
+            result['grade_weight'] = result['grade'].map(grade_order)
+
+            # 根据排序键选择排序列
+            if sort_key == "species":
+                sort_col = 'pinyin'
+            elif sort_key == "grade":
+                sort_col = 'grade_weight'
+            else:
+                sort_col = sort_key
+
+            # 主排序
+            result_sorted = result.sort_values(
+                sort_col,
+                ascending=ascending,
+                kind='mergesort'
+            )
+
+            # 次级排序（等级降序、评分降序、ID升序）
+            result_sorted = result_sorted.sort_values(
+                ['grade_weight', 'score', 'id'],
+                ascending=[False, False, True],
+                kind='mergesort'
+            )
 
             # 添加数据到表格
-            for _, row in result.iterrows():
+            for _, row in result_sorted.iterrows():
                 self.add_row_to_table(row)
 
         except Exception as e:
@@ -301,7 +413,7 @@ class TrophyManager:
         tk.Label(dialog, text="等级:").grid(row=2, column=0, padx=5, pady=5, sticky=tk.E)
         grade_var = tk.StringVar(dialog)
         grade_var.set("青铜")
-        grade_menu = tk.OptionMenu(dialog, grade_var, "青铜", "白银", "黄金", "钻石")
+        grade_menu = tk.OptionMenu(dialog, grade_var, "青铜", "白银", "黄金", "钻石", "珍禽异兽")
         grade_menu.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W)
 
         # 评分
@@ -358,6 +470,45 @@ class TrophyManager:
 
         tk.Button(button_frame, text="确认", command=add_trophy).pack(side=tk.LEFT, padx=5)
         tk.Button(button_frame, text="取消", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+
+    def delete_selected(self):
+        """删除选中的一条或多条记录"""
+        selected_items = self.table.selection()
+        if not selected_items:
+            messagebox.showwarning("警告", "请先选择要删除的战利品")
+            return
+
+        # 获取选中的ID列表
+        selected_ids = [self.table.item(item, "values")[4] for item in selected_items]
+
+        # 确认删除
+        confirm = messagebox.askyesno(
+            "确认删除",
+            f"确定要删除选中的 {len(selected_ids)} 个战利品吗？"
+        )
+        if not confirm:
+            return
+
+        try:
+            # 读取所有数据
+            with open(self.settings["csv_path"], "r", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                fieldnames = [field.strip('\ufeff') for field in reader.fieldnames]
+                # 保留未选中的记录
+                rows = [row for row in reader if row["id"] not in selected_ids]
+
+            # 写回文件
+            with open(self.settings["csv_path"], "w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+
+            # 刷新表格
+            self.load_data()
+            messagebox.showinfo("成功", f"已删除 {len(selected_ids)} 个战利品")
+
+        except Exception as e:
+            messagebox.showerror("错误", f"删除战利品失败: {e}")
 
     def on_row_double_click(self, event):
         """双击行事件处理"""
@@ -450,7 +601,7 @@ class TrophyManager:
         tk.Label(dialog, text="等级:").grid(row=3, column=0, padx=5, pady=5, sticky=tk.E)
         grade_var = tk.StringVar(dialog)
         grade_var.set(values[2])
-        grade_menu = tk.OptionMenu(dialog, grade_var, "青铜", "白银", "黄金", "钻石")
+        grade_menu = tk.OptionMenu(dialog, grade_var, "青铜", "白银", "黄金", "钻石", "珍禽异兽")
         grade_menu.grid(row=3, column=1, padx=5, pady=5, sticky=tk.W)
 
         # 评分（可修改）
@@ -536,7 +687,7 @@ class TrophyManager:
 
         # CSV文件路径
         tk.Label(dialog, text="CSV文件路径:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.E)
-        path_entry = tk.Entry(dialog, width=40)
+        path_entry = tk.Entry(dialog, width=20)
         path_entry.insert(0, self.settings["csv_path"])
         path_entry.grid(row=0, column=1, padx=5, pady=5)
 
